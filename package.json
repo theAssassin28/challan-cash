@@ -1,0 +1,27 @@
+{
+  "name": "challan-cash",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Challan Cash: get paid for the delivery, not the paperwork. End-to-end prototype.",
+  "type": "module",
+  "workspaces": [
+    "shared",
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,green \"npm run dev -w server\" \"npm run dev -w web\"",
+    "build": "npm run build -w web",
+    "start": "NODE_ENV=production npm run start -w server",
+    "typecheck": "tsc -p shared && tsc -p server && tsc -p web",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

@@ -1,0 +1,15 @@
+/* Additions for the end-to-end build. The original prototype styles are in styles.css, unchanged. */
+#root{display:contents}
+[hidden]{display:none!important}
+.realphoto{display:block;width:100%;max-height:360px;object-fit:contain;border-radius:2px;background:#20242c}
+.pbtn:disabled{opacity:.6;cursor:default}
+.boot-err{font:400 14px/1.5 Lato,sans-serif;color:#2b2f38;background:#fff;padding:16px 18px;border-radius:8px;max-width:420px}
+
+/* driver's page on a real phone */
+body.capture{display:block;padding:0;background:var(--gap2);min-height:100dvh}
+.capture-page{max-width:480px;margin:0 auto;min-height:100dvh;background:var(--gap2)}
+.capture-page .psec{margin-bottom:0}
+.cp-msg{padding:40px 22px;font:400 13px/19px Lato;color:var(--mut);text-align:center}
+.cp-msg b{display:block;font:700 16px Lato;color:var(--ink);margin-bottom:6px}
+.cp-err{margin:10px 16px;font:400 12px Lato;color:var(--hold)}
+.cp-sample{display:block;margin:14px auto 30px;font:700 12px Lato;color:var(--link);text-align:center}
