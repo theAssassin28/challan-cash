@@ -105,7 +105,9 @@ export async function geminiRead(d: Dispatch, image: Uint8Array, mime: string, a
       const text = out.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
       return mapRead(d, ChallanRead.parse(JSON.parse(text)));
     }
-    last = `${model} ${res.status}: ${JSON.parse(await res.text().catch(() => '{}') || '{}')?.error?.message ?? ''}`.slice(0, 200);
+    const raw = await res.text().catch(() => '');
+    let msg = raw; try { msg = JSON.parse(raw)?.error?.message ?? raw } catch { /* not JSON */ }
+    last = `${model} ${res.status}: ${msg}`.slice(0, 200);
     if (![404, 429, 500, 503].includes(res.status)) break;
   }
   throw new Error(last || 'Gemini did not answer in time');
