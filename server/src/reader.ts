@@ -79,9 +79,9 @@ const GEMINI_SCHEMA = {
 const GEMINI_MODELS = () => [...new Set([process.env.GEMINI_MODEL || 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-flash-lite-latest'])];
 
 export async function geminiRead(d: Dispatch, image: Uint8Array, mime: string, attempt = 1): Promise<ReadResult> {
-  const models = GEMINI_MODELS(), model = models[(attempt - 1) % models.length];
+  const models = GEMINI_MODELS();
   const deadline = Date.now() + 9_000; // Netlify Functions stop at 10 seconds
-  const call = (noThinking: boolean) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+  const call = (model: string, noThinking: boolean) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY! },
     body: JSON.stringify({
@@ -94,12 +94,21 @@ export async function geminiRead(d: Dispatch, image: Uint8Array, mime: string, a
     }),
     signal: AbortSignal.timeout(Math.max(1000, deadline - Date.now())),
   });
-  let res = await call(true);
-  if (res.status === 400 && /thinking/i.test(await res.clone().text()) && deadline - Date.now() > 3000) res = await call(false);
-  if (!res.ok) throw new Error(`${model} ${res.status}: ${(await res.text()).slice(0, 160)}`);
-  const out = await res.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-  const text = out.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
-  return mapRead(d, ChallanRead.parse(JSON.parse(text)));
+  let last = '';
+  // Start with a different model on each attempt. A busy model answers fast, so try the next one.
+  for (let i = 0; i < models.length && deadline - Date.now() > 1500; i++) {
+    const model = models[(attempt - 1 + i) % models.length];
+    let res = await call(model, true);
+    if (res.status === 400 && deadline - Date.now() > 2500) res = await call(model, false); // model does not take the setting
+    if (res.ok) {
+      const out = await res.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+      const text = out.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
+      return mapRead(d, ChallanRead.parse(JSON.parse(text)));
+    }
+    last = `${model} ${res.status}: ${JSON.parse(await res.text().catch(() => '{}') || '{}')?.error?.message ?? ''}`.slice(0, 200);
+    if (![404, 429, 500, 503].includes(res.status)) break;
+  }
+  throw new Error(last || 'Gemini did not answer in time');
 }
 
 /* ---------- Claude (paid, optional) ---------- */
