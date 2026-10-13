@@ -4,8 +4,8 @@ import type { Dispatch, Reading } from '@cc/shared';
 import { MERCHANT, inr } from '@cc/shared';
 
 // Reads a photo of a stamped delivery challan and flags what it found.
-// The scripted reader returns the sample readings used in the demo. When ANTHROPIC_API_KEY
-// is set, real uploaded photos are read by Claude instead. Either way the owner confirms
+// The scripted reader returns the sample readings used in the demo. Real uploaded photos are
+// read by Gemini (GEMINI_API_KEY, free tier) or Claude (ANTHROPIC_API_KEY). Either way the owner confirms
 // every value: a stamp match is evidence, not proof.
 
 export interface ReadResult { readings: Reading[]; recd: number | null }
@@ -62,9 +62,38 @@ const SCHEMA = {
   },
 };
 
-export const claudeEnabled = () => !!process.env.ANTHROPIC_API_KEY;
+const prompt = (d: Dispatch) => `This is a photo of the receiver's copy of a delivery challan from ${MERCHANT.name} to ${d.buyer}, for ${d.qty} ${d.unit} of ${d.item}. Read the receiver's stamp, signature, any condition wording and any handwritten note. Report only what you can see. Use null when something is missing or unreadable.`;
+const b64 = (image: Uint8Array) => Buffer.from(image).toString('base64');
 
-export async function claudeRead(d: Dispatch, image: Buffer, mime: string): Promise<ReadResult> {
+/* ---------- Google Gemini (has a free tier) ---------- */
+const GEMINI_SCHEMA = {
+  type: 'OBJECT',
+  required: SCHEMA.required,
+  properties: Object.fromEntries(Object.entries(SCHEMA.properties).map(([k, v]) => {
+    const t = Array.isArray(v.type) ? v.type[0] : v.type;
+    return [k, { type: t.toUpperCase(), nullable: Array.isArray(v.type), ...('description' in v ? { description: v.description } : {}) }];
+  })),
+};
+
+export async function geminiRead(d: Dispatch, image: Uint8Array, mime: string): Promise<ReadResult> {
+  const model = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY! },
+    body: JSON.stringify({
+      contents: [{ parts: [{ inline_data: { mime_type: mime, data: b64(image) } }, { text: prompt(d) }] }],
+      generationConfig: { responseMimeType: 'application/json', responseSchema: GEMINI_SCHEMA, temperature: 0 },
+    }),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!res.ok) throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const body = await res.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+  const text = body.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
+  return mapRead(d, ChallanRead.parse(JSON.parse(text)));
+}
+
+/* ---------- Claude (paid, optional) ---------- */
+export async function claudeRead(d: Dispatch, image: Uint8Array, mime: string): Promise<ReadResult> {
   const client = new Anthropic();
   const res = await client.beta.messages.create({
     model: 'claude-opus-5-5',
@@ -75,14 +104,21 @@ export async function claudeRead(d: Dispatch, image: Buffer, mime: string): Prom
     messages: [{
       role: 'user',
       content: [
-        { type: 'image', source: { type: 'base64', media_type: mime as 'image/jpeg', data: image.toString('base64') } },
-        { type: 'text', text: `This is a photo of the receiver's copy of a delivery challan from ${MERCHANT.name} to ${d.buyer}, for ${d.qty} ${d.unit} of ${d.item}. Read the receiver's stamp, signature, any condition wording and any handwritten note. Report only what you can see. Use null when something is missing or unreadable.` },
+        { type: 'image', source: { type: 'base64', media_type: mime as 'image/jpeg', data: b64(image) } },
+        { type: 'text', text: prompt(d) },
       ],
     }],
   } as unknown as Anthropic.Beta.MessageCreateParamsNonStreaming);
   if (res.stop_reason === 'refusal') throw new Error('reader declined the photo');
   const text = res.content.flatMap(b => (b.type === 'text' ? [b.text] : [])).join('');
   return mapRead(d, ChallanRead.parse(JSON.parse(text)));
+}
+
+/** Gemini if GEMINI_API_KEY is set, else Claude if ANTHROPIC_API_KEY is set, else scripted only. */
+export function pickReader() {
+  if (process.env.GEMINI_API_KEY) return { engine: 'gemini' as const, read: geminiRead };
+  if (process.env.ANTHROPIC_API_KEY) return { engine: 'claude' as const, read: claudeRead };
+  return { engine: 'scripted' as const, read: undefined };
 }
 
 export function mapRead(d: Dispatch, c: ChallanRead): ReadResult {

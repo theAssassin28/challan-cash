@@ -121,7 +121,7 @@ function Guide() {
   return (
     <aside className="guide">
       <h1>Challan Cash: prototype</h1>
-      <p><b>Prakash</b> owns Shree Ganesh Corrugators in Chakan and uses the Razorpay app. <b>Ramesh</b> drives his tempo and only uses WhatsApp. Sample data, {s.engine === 'claude' ? 'AI reads real photos' : 'scripted AI'}. Every step runs through the live API.</p>
+      <p><b>Prakash</b> owns Shree Ganesh Corrugators in Chakan and uses the Razorpay app. <b>Ramesh</b> drives his tempo and only uses WhatsApp. Sample data, {s.engine === 'scripted' ? 'scripted AI' : 'AI reads real photos'}. Every step runs through the live API.</p>
       <div className="next">{doneAll
         ? <><b>DONE · {pd.sh.toUpperCase()}</b>{pd.sh} is closed. Try another case:<div className="np">{others.map(x => <button key={x} onClick={() => tryPath(x)}>{CASES[x]} &rarr;</button>)}</div></>
         : h[0] ? <><b>NEXT · {h[0].toUpperCase()}</b>{h[1]}</> : null}</div>

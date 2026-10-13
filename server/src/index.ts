@@ -1,20 +1,28 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
-import { Store } from './store.js';
+import { readFileSync } from 'node:fs';
+import { serve } from '@hono/node-server';
+import { serveStatic } from '@hono/node-server/serve-static';
+import { FileRepo } from './repo.js';
 import { Service } from './service.js';
-import { createApp, loadPhoto } from './app.js';
-import { claudeEnabled, claudeRead } from './reader.js';
+import { createApp } from './app.js';
+import { pickReader } from './reader.js';
 
+// Local server. On Netlify the same app runs as a function (netlify/functions/api.ts).
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const dataDir = process.env.DATA_DIR ?? join(root, 'data');
-const uploadDir = join(dataDir, 'uploads');
+const reader = pickReader();
+const svc = new Service(new FileRepo(dataDir), { read: reader.read, engine: reader.engine });
+const app = createApp(svc);
 
-const store = new Store(join(dataDir, 'challan-cash.db'));
-const svc = new Service(store, { read: claudeEnabled() ? claudeRead : undefined, loadPhoto: loadPhoto(uploadDir) });
-const app = createApp(svc, { uploadDir, webDist: process.env.NODE_ENV === 'production' ? join(root, 'web/dist') : undefined });
+if (process.env.NODE_ENV === 'production') {
+  const dist = join(root, 'web/dist');
+  app.use('/*', serveStatic({ root: dist }));
+  app.get('*', c => c.html(readFileSync(join(dist, 'index.html'), 'utf8')));
+}
 
 const port = Number(process.env.PORT ?? 8787);
-app.listen(port, () => {
-  console.log(`Challan Cash API on http://localhost:${port}`);
-  console.log(`Challan reader: ${claudeEnabled() ? 'Claude (real photos), scripted (demo shots)' : 'scripted (set ANTHROPIC_API_KEY to read real photos)'}`);
+serve({ fetch: app.fetch, port }, () => {
+  console.log(`Challan Cash on http://localhost:${port}`);
+  console.log(`Challan reader: ${reader.engine === 'scripted' ? 'scripted (set GEMINI_API_KEY to read real photos)' : reader.engine}`);
 });

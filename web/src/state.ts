@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { ORD, type Dispatch, type Key, type Notice, type Phone, type Snapshot } from '@cc/shared';
-import { api, subscribe } from './api';
+import { api } from './api';
 
 export type View = 'home' | 'tx' | 'prod' | 'store' | 'disp' | 'dd' | 'chk' | 'adv' | 'cam' | 'wa' | 'alist' | 'web';
 export type SheetKind = 'notOnBooks' | 'advOct' | 'total' | 'step' | 'msme' | 'acct' | 'mail' | 'record' | 'photo' | 'qty' | 'kfs' | 'bio' | 'help' | 'link';
@@ -46,19 +46,31 @@ export const ord = (d: Dispatch) => ORD[d.status];
 export const notOnBooks = () => Object.values(S().dispatches).filter(d => ord(d) < 3);
 
 /* ---------- sync with the server ---------- */
+// The app polls for changes: Netlify Functions cannot hold a live connection open.
+const seen = new Set<number>();
+function take(snap: Snapshot, show: boolean) {
+  for (const n of snap.notices) if (!seen.has(n.id)) { seen.add(n.id); if (show) hun(n) }
+  const cur = get().snap;
+  if (!cur || cur.version !== snap.version || cur.workspace !== snap.workspace) set({ snap });
+}
 let refreshing: Promise<void> | null = null, again = false;
 export async function refresh() {
   if (refreshing) { again = true; return refreshing }
   refreshing = (async () => {
-    do { again = false; set({ snap: await api.state() }) } while (again);
+    do { again = false; take(await api.state(), true) } while (again);
   })().finally(() => { refreshing = null });
   return refreshing;
 }
-let live: ReturnType<typeof subscribe> | null = null;
+let pollT: ReturnType<typeof setTimeout>;
+function poll() {
+  clearTimeout(pollT);
+  const fast = get().snap?.pending, hidden = document.visibilityState === 'hidden';
+  pollT = setTimeout(() => { refresh().catch(() => {}).finally(poll) }, hidden ? 5000 : fast ? 700 : 1500);
+}
 export async function boot() {
-  const snap = await api.state();
-  set({ snap });
-  live = subscribe({ state: () => void refresh(), notice: n => hun(n) });
+  take(await api.state(), false);
+  poll();
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void refresh() });
 }
 
 /** Runs a server action, refreshes state, and shows any error as a snackbar. */
@@ -86,7 +98,7 @@ export function switchPhone(p?: Phone) {
 }
 export async function restart(path: Key = 'a') {
   const snap = await api.reset(path, path !== 'a');
-  live?.reopen();
+  for (const n of snap.notices) seen.add(n.id);
   set({
     snap, phone: 'p', scr: { p: path === 'a' ? 'home' : 'dd', r: 'alist' }, k: path, compose: null, waWith: 'r', rp: 'intro', driverFile: null,
     revealed: {}, offer: {}, sheet: null, dialog: null, snack: null, hun: null, queue: { p: [], r: [] }, rOpened: false,

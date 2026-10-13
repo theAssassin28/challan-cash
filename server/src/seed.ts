@@ -1,5 +1,5 @@
 import type { Key, Txn } from '@cc/shared';
-import type { StoredDispatch } from './store.js';
+import type { StoredDispatch } from './doc.js';
 
 // Sample data from the product note. Prakash is a composite persona.
 const blank = {

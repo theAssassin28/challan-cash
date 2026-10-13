@@ -10,22 +10,23 @@ The product note is in `docs/product-note.pdf`. The original single-file HTML pr
 
 - **Owner app (Prakash)**: lock screen, home, Dispatches, one dispatch, check challan, advance offer, fingerprint confirm, record.
 - **Driver (Ramesh)**: WhatsApp chat and the one-time capture page. The capture page also works on a real phone at `/c/<token>`, with the real camera or a gallery upload. Each link works once.
-- **Server**: every step is an API call. State is stored in SQLite, one workspace per browser.
+- **Server**: every step is an API call. Each browser gets its own demo workspace, stored as one document (Netlify Blobs when deployed, JSON files locally).
   - Dispatch state machine: transit, asked, photo, proof, await, adv, paid
   - One-time capture links, photo upload (multipart), QR code for the link
-  - Challan reader: scripted readings by default, Claude reads real photos when `ANTHROPIC_API_KEY` is set
+  - Challan reader: scripted readings by default. Real photos are read by Google Gemini (free tier) when `GEMINI_API_KEY` is set, or by Claude when `ANTHROPIC_API_KEY` is set
   - Proof email to the buyer's accounts (stored in an outbox, not actually sent)
   - Credit note posted by the clerk, buyer GRN reply, new-buyer confirmation
   - Lender: offer, key fact statement numbers, limit check, two-part disbursal (50% now, rest on QC), repayment from the buyer's payment
-  - Record per dispatch is append-only. SQLite triggers reject updates and deletes
-  - Live updates and phone notifications over server-sent events
-- **Simulated outside parties**: Anil (driver who replies by himself), Meena (clerk), the buyer's accounts team, the lender and the bank. They run on the server with short delays.
+  - Record per dispatch is append-only. A save that changes or drops an entry is rejected
+  - Saves are conditional, so two requests at once cannot overwrite each other
+  - The app polls for changes and phone notifications
+- **Simulated outside parties**: Anil (driver who replies by himself), Meena (clerk), the buyer's accounts team, the lender and the bank. Their replies are saved as timed events and applied on the next request after they are due, which works without a long-running server.
 
 Three cases, same as the original: Endurance (main flow), Sundaram (new buyer, owner takes the photo, advance capped at 50%), Pune Precision (challan stuck with the driver for 4 days).
 
 ## Run it
 
-Needs Node 22.13 or later.
+Needs Node 22 or later.
 
 ```
 npm install
@@ -43,7 +44,15 @@ npm run build
 npm start          # serves the app and API on http://localhost:8787
 ```
 
-Docker:
+## Deploy on Netlify
+
+Everything runs on Netlify: the app on the CDN, the API as one function (`netlify/functions/api.ts`), data and photos in Netlify Blobs. `netlify.toml` holds the build settings.
+
+1. In Netlify: Add new site, Import an existing project, GitHub, pick this repo and the branch to deploy.
+2. Leave the build settings as they are (read from `netlify.toml`). Deploy.
+3. Optional: Site configuration, Environment variables, add `GEMINI_API_KEY` (free key from https://aistudio.google.com/apikey) so real photos are read by AI. Redeploy.
+
+Docker (any other host):
 
 ```
 docker build -t challan-cash .
@@ -54,10 +63,12 @@ Settings (see `.env.example`):
 
 | Variable | Use |
 | --- | --- |
-| `ANTHROPIC_API_KEY` | Optional. Real photos are read by Claude. Without it, the scripted reader is used |
+| `GEMINI_API_KEY` | Optional. Real photos are read by Google Gemini (free tier) |
+| `GEMINI_MODEL` | Optional. Default `gemini-flash-latest` |
+| `ANTHROPIC_API_KEY` | Optional. Used only if no Gemini key is set. Real photos are read by Claude |
 | `PUBLIC_URL` | Base URL used in the driver's link when running behind a proxy |
 | `PORT` | Default 8787 |
-| `DATA_DIR` | Where the SQLite file and uploads go. Default `./data` |
+| `DATA_DIR` | Local only. Where workspaces and photos are saved. Default `./data` |
 
 ## Checks
 
@@ -66,13 +77,14 @@ npm run typecheck
 npm test
 ```
 
-Tests cover the money rules and the full API flow for all three cases, including the one-time link and the append-only record.
+Tests cover the money rules and the full API flow for all three cases, including the one-time link, the append-only record and conflicting saves.
 
 ## Layout
 
 ```
 shared/   domain types and money rules (advance caps, charges, APR), used by both sides
-server/   Express API, SQLite store, simulated parties, challan reader
+server/   Hono API, workspace storage, simulated parties, challan reader
+netlify/  the Netlify Function that serves the API
 web/      React app. styles.css is the original prototype's CSS, unchanged
 docs/     product note and the original HTML prototype
 ```
@@ -81,8 +93,7 @@ docs/     product note and the original HTML prototype
 
 | Method | Path | What it does |
 | --- | --- | --- |
-| GET | `/api/state` | Full snapshot for this workspace |
-| GET | `/api/events` | Server-sent events: `state`, `notice` |
+| GET | `/api/state` | Full snapshot for this workspace, with recent notifications |
 | POST | `/api/demo/reset` | New workspace. Body `{ path: 'a'|'b'|'c', unlocked }` |
 | POST | `/api/dispatches/:k/request-photo` | Creates a one-time link and sends it on WhatsApp |
 | POST | `/api/dispatches/:k/photo` | Owner's own photo. Multipart `photo`, or empty for the sample shot |

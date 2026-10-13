@@ -1,138 +1,104 @@
-import express, { type NextFunction, type Request, type Response } from 'express';
-import multer from 'multer';
+import { Hono, type Context } from 'hono';
+import { getCookie, setCookie } from 'hono/cookie';
 import QRCode from 'qrcode';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { z } from 'zod';
 import { CLERK, LENDER, MERCHANT, R, cn, inr, invNo, type Key } from '@cc/shared';
-import { HttpError, Service, type BusEvent } from './service.js';
+import { HttpError, Service } from './service.js';
 
 const COOKIE = 'cc_ws';
 const KeyP = z.enum(['a', 'b', 'c']);
-const IMAGE = /^image\/(jpeg|png|webp|gif)$/;
+const IMAGE = /^image\/(jpeg|png|webp|gif|heic|heif)$/;
+const MAX_PHOTO = 5.5 * 1024 * 1024; // Netlify Functions accept up to 6 MB per request
 
-export function createApp(svc: Service, opts: { uploadDir: string; webDist?: string }) {
-  mkdirSync(opts.uploadDir, { recursive: true });
-  const upload = multer({
-    storage: multer.diskStorage({ destination: opts.uploadDir }),
-    limits: { fileSize: 12 * 1024 * 1024 },
-    fileFilter: (_req, f, cb) => cb(null, IMAGE.test(f.mimetype)),
-  });
-  const app = express();
-  app.disable('x-powered-by');
-  app.set('trust proxy', true);
-  app.use(express.json());
+export function createApp(svc: Service) {
+  const app = new Hono();
 
-  const wsOf = (req: Request, res: Response): string => {
-    const m = /(?:^|;\s*)cc_ws=([\w-]+)/.exec(req.headers.cookie ?? '');
-    if (m && svc.exists(m[1])) return m[1];
-    const id = svc.create();
-    setCookie(res, id);
-    return id;
+  const wsOf = async (c: Context): Promise<string> => {
+    const id = getCookie(c, COOKIE);
+    if (id && /^[\w-]+$/.test(id) && (await svc.exists(id))) return id;
+    const fresh = await svc.create();
+    remember(c, fresh);
+    return fresh;
   };
-  const setCookie = (res: Response, id: string) => res.cookie(COOKIE, id, { httpOnly: true, sameSite: 'lax', maxAge: 30 * 864e5, path: '/' });
-  const key = (req: Request) => KeyP.parse(req.params.k) as Key;
-  const origin = (req: Request) => process.env.PUBLIC_URL ?? `${req.protocol}://${req.get('host')}`;
-  const wrap = (fn: (req: Request, res: Response) => unknown) => (req: Request, res: Response, next: NextFunction) => {
-    Promise.resolve(fn(req, res)).then(out => { if (!res.headersSent) res.json(out ?? { ok: true }) }).catch(next);
+  const remember = (c: Context, id: string) => setCookie(c, COOKIE, id, { httpOnly: true, sameSite: 'Lax', maxAge: 30 * 86400, path: '/', secure: new URL(c.req.url).protocol === 'https:' });
+  const key = (c: Context) => KeyP.parse(c.req.param('k')) as Key;
+  const origin = (c: Context) => process.env.PUBLIC_URL || new URL(c.req.url).origin;
+  const ok = (c: Context, out?: unknown) => c.json(out ?? { ok: true });
+  const photoOf = async (c: Context) => {
+    if (!(c.req.header('content-type') ?? '').includes('multipart/form-data')) return { simulated: true as const };
+    const f = (await c.req.parseBody()).photo;
+    if (!(f instanceof File)) return { simulated: true as const };
+    if (!IMAGE.test(f.type)) throw new HttpError(400, 'Send a photo (JPEG, PNG or WebP)');
+    if (f.size > MAX_PHOTO) throw new HttpError(413, 'Photo is too large');
+    return { simulated: false as const, bytes: new Uint8Array(await f.arrayBuffer()), mime: f.type };
   };
 
   /* ---------- owner app ---------- */
-  app.get('/api/state', wrap((req, res) => svc.snapshot(wsOf(req, res))));
-  app.post('/api/demo/reset', wrap((req, res) => {
-    const { path, unlocked } = z.object({ path: KeyP.default('a'), unlocked: z.boolean().default(false) }).parse(req.body ?? {});
-    const id = svc.create(path, unlocked); setCookie(res, id);
-    return svc.snapshot(id);
-  }));
-  app.post('/api/demo/unlock', wrap((req, res) => svc.unlock(wsOf(req, res))));
-
-  app.get('/api/events', (req, res) => {
-    const ws = wsOf(req, res);
-    res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
-    res.flushHeaders();
-    res.write(`event: hello\ndata: ${JSON.stringify({ workspace: ws })}\n\n`);
-    const on = (e: BusEvent) => res.write(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`);
-    const ping = setInterval(() => res.write(': ping\n\n'), 25000);
-    svc.bus.on(ws, on);
-    req.on('close', () => { clearInterval(ping); svc.bus.off(ws, on) });
+  app.get('/api/state', async c => ok(c, await svc.snapshot(await wsOf(c))));
+  app.post('/api/demo/reset', async c => {
+    const { path, unlocked } = z.object({ path: KeyP.default('a'), unlocked: z.boolean().default(false) }).parse(await c.req.json().catch(() => ({})));
+    const id = await svc.create(path, unlocked); remember(c, id);
+    return ok(c, await svc.snapshot(id));
   });
+  app.post('/api/demo/unlock', async c => ok(c, await svc.unlock(await wsOf(c))));
 
-  app.post('/api/dispatches/:k/request-photo', wrap((req, res) => {
-    const { token } = svc.requestPhoto(wsOf(req, res), key(req), origin(req));
-    return { token, url: `${origin(req)}/c/${token}` };
-  }));
-  app.post('/api/dispatches/:k/remind', wrap((req, res) => svc.remind(wsOf(req, res), key(req))));
-  app.get('/api/dispatches/:k/link', wrap((req, res) => {
-    const l = svc.store.latestLink(wsOf(req, res), key(req));
-    return l ? { token: l.token, url: `${origin(req)}/c/${l.token}`, used: !!l.used_at } : null;
-  }));
-  app.post('/api/dispatches/:k/photo', upload.single('photo'), wrap(async (req, res) => {
-    const ws = wsOf(req, res), k = key(req);
-    if (req.file) await svc.selfPhoto(ws, k, { simulated: false, file: req.file.filename, mime: req.file.mimetype });
-    else await svc.selfPhoto(ws, k, { simulated: true });
-  }));
-  app.get('/api/dispatches/:k/readings', wrap((req, res) => svc.readings(wsOf(req, res), key(req))));
-  app.patch('/api/dispatches/:k/received', wrap((req, res) => {
-    const { qty } = z.object({ qty: z.number() }).parse(req.body);
-    svc.setReceived(wsOf(req, res), key(req), qty);
-  }));
-  app.post('/api/dispatches/:k/proof', wrap((req, res) => svc.sendProof(wsOf(req, res), key(req))));
-  app.get('/api/dispatches/:k/email', wrap((req, res) => svc.emailView(wsOf(req, res), key(req))));
-  app.get('/api/dispatches/:k/offer', wrap((req, res) => svc.offer(wsOf(req, res), key(req), Number(req.query.amount) || undefined)));
-  app.post('/api/dispatches/:k/advance', wrap((req, res) => {
-    const { amount } = z.object({ amount: z.number().int().positive() }).parse(req.body);
-    svc.takeAdvance(wsOf(req, res), key(req), amount);
-  }));
-  app.post('/api/dispatches/:k/skip-advance', wrap((req, res) => svc.skipAdvance(wsOf(req, res), key(req))));
-  app.get('/api/dispatches/:k/record', (req, res, next) => {
-    try { res.type('html').send(recordPage(svc, wsOf(req, res), key(req))) } catch (e) { next(e) }
+  app.post('/api/dispatches/:k/request-photo', async c => {
+    const { token } = await svc.requestPhoto(await wsOf(c), key(c), origin(c));
+    return ok(c, { token, url: `${origin(c)}/c/${token}` });
   });
-  app.get('/api/loans', wrap((req, res) => svc.loans(wsOf(req, res))));
+  app.post('/api/dispatches/:k/remind', async c => ok(c, await svc.remind(await wsOf(c), key(c))));
+  app.get('/api/dispatches/:k/link', async c => {
+    const l = await svc.latestLink(await wsOf(c), key(c));
+    return ok(c, l ? { token: l.token, url: `${origin(c)}/c/${l.token}`, used: !!l.used_at } : null);
+  });
+  app.post('/api/dispatches/:k/photo', async c => ok(c, await svc.selfPhoto(await wsOf(c), key(c), await photoOf(c))));
+  app.get('/api/dispatches/:k/readings', async c => ok(c, await svc.readings(await wsOf(c), key(c))));
+  app.patch('/api/dispatches/:k/received', async c => {
+    const { qty } = z.object({ qty: z.number() }).parse(await c.req.json());
+    return ok(c, await svc.setReceived(await wsOf(c), key(c), qty));
+  });
+  app.post('/api/dispatches/:k/proof', async c => ok(c, await svc.sendProof(await wsOf(c), key(c))));
+  app.get('/api/dispatches/:k/email', async c => ok(c, await svc.emailView(await wsOf(c), key(c))));
+  app.get('/api/dispatches/:k/offer', async c => ok(c, await svc.offer(await wsOf(c), key(c), Number(c.req.query('amount')) || undefined)));
+  app.post('/api/dispatches/:k/advance', async c => {
+    const { amount } = z.object({ amount: z.number().int().positive() }).parse(await c.req.json());
+    return ok(c, await svc.takeAdvance(await wsOf(c), key(c), amount));
+  });
+  app.post('/api/dispatches/:k/skip-advance', async c => ok(c, await svc.skipAdvance(await wsOf(c), key(c))));
+  app.get('/api/dispatches/:k/record', async c => c.html(await recordPage(svc, await wsOf(c), key(c))));
+  app.get('/api/loans', async c => ok(c, await svc.loans(await wsOf(c))));
 
   /* ---------- stand-ins for the buyer's accounts team ---------- */
-  app.post('/api/sim/:k/booked', wrap((req, res) => svc.bookAck(wsOf(req, res), key(req))));
-  app.post('/api/sim/:k/confirm', wrap((req, res) => svc.buyerConfirms(wsOf(req, res), key(req))));
-  app.post('/api/sim/:k/pay', wrap((req, res) => svc.buyerPays(wsOf(req, res), key(req))));
+  app.post('/api/sim/:k/booked', async c => ok(c, await svc.bookAck(await wsOf(c), key(c))));
+  app.post('/api/sim/:k/confirm', async c => ok(c, await svc.buyerConfirms(await wsOf(c), key(c))));
+  app.post('/api/sim/:k/pay', async c => ok(c, await svc.buyerPays(await wsOf(c), key(c))));
 
   /* ---------- driver's one-time link (no login, no cookie) ---------- */
-  app.get('/api/capture/:token', wrap(req => svc.captureInfo(String(req.params.token))));
-  app.post('/api/capture/:token/photo', upload.single('photo'), wrap(async req => {
-    const t = String(req.params.token);
-    if (req.file) await svc.capture(t, { simulated: false, file: req.file.filename, mime: req.file.mimetype });
-    else await svc.capture(t, { simulated: true });
-  }));
-  app.get('/api/capture/:token/qr.svg', async (req, res, next) => {
-    try {
-      svc.captureInfo(String(req.params.token));
-      res.type('image/svg+xml').send(await QRCode.toString(`${origin(req)}/c/${req.params.token}`, { type: 'svg', margin: 1 }));
-    } catch (e) { next(e) }
+  app.get('/api/capture/:token', async c => ok(c, await svc.captureInfo(c.req.param('token'))));
+  app.post('/api/capture/:token/photo', async c => ok(c, await svc.capture(c.req.param('token'), await photoOf(c))));
+  app.get('/api/capture/:token/qr.svg', async c => {
+    await svc.captureInfo(c.req.param('token'));
+    const svg = await QRCode.toString(`${origin(c)}/c/${c.req.param('token')}`, { type: 'svg', margin: 1 });
+    return c.body(svg, 200, { 'Content-Type': 'image/svg+xml' });
   });
 
-  app.get('/api/photos/:id', (req, res) => {
-    const p = svc.store.photo(String(req.params.id));
-    if (!p || !p.file || p.ws !== wsOf(req, res)) { res.status(404).end(); return }
-    res.type(p.mime ?? 'image/jpeg').sendFile(join(opts.uploadDir, p.file));
+  app.get('/api/photos/:id', async c => {
+    const p = await svc.photoFor(await wsOf(c), c.req.param('id'));
+    if (!p) return c.body(null, 404);
+    return c.body(p.bytes as unknown as ArrayBuffer, 200, { 'Content-Type': p.mime, 'Cache-Control': 'private, max-age=86400' });
   });
 
-  /* ---------- web app ---------- */
-  if (opts.webDist && existsSync(opts.webDist)) {
-    app.use(express.static(opts.webDist, { index: false }));
-    app.get(/^(?!\/api\/).*/, (_req, res) => res.sendFile(join(opts.webDist!, 'index.html')));
-  }
-
-  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-    if (err instanceof HttpError) { res.status(err.status).json({ error: err.message }); return }
-    if (err instanceof z.ZodError) { res.status(400).json({ error: 'Invalid request', issues: err.issues }); return }
+  app.onError((err, c) => {
+    if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
+    if (err instanceof z.ZodError) return c.json({ error: 'Invalid request', issues: err.issues }, 400);
     console.error(err);
-    res.status(500).json({ error: 'Something went wrong' });
+    return c.json({ error: 'Something went wrong' }, 500);
   });
   return app;
 }
 
-export const loadPhoto = (dir: string) => (file: string) => readFileSync(join(dir, file));
-
-function recordPage(svc: Service, ws: string, k: Key) {
-  const d = svc.snapshot(ws).dispatches[k];
+async function recordPage(svc: Service, ws: string, k: Key) {
+  const d = (await svc.snapshot(ws)).dispatches[k];
   const e = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
   const rows = d.log.map(l => `<tr><td>${e(l.at)}</td><td>${e(l.text)}</td></tr>`).join('');
   return `<!doctype html><html><head><meta charset="utf-8"><title>Record ${e(d.id)}</title>

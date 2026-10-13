@@ -1,0 +1,16 @@
+[build]
+  command = "npm run build"
+  publish = "web/dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+# The app is a single page. The API is served by netlify/functions/api.ts at /api/*.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

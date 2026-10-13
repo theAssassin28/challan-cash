@@ -93,7 +93,13 @@ export interface Snapshot {
   dispatches: Record<Key, Dispatch>;
   pays: Txn[];
   chats: { r: ChatMessage[]; a: ChatMessage[] };
-  engine: 'scripted' | 'claude';
+  engine: 'scripted' | 'gemini' | 'claude';
+  /** Changes on every save. */
+  version: number;
+  /** Phone notifications from the last two minutes. The app shows each id once. */
+  notices: Notice[];
+  /** True while a simulated reply or a delayed notification is still to come. */
+  pending: boolean;
 }
 
 export interface Offer {
