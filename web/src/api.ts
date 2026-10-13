@@ -13,12 +13,12 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
   if (!res.ok) throw new ApiError(res.status, data?.error ?? `Request failed (${res.status})`);
   return data as T;
 }
-/** Phone photos can be 5 to 10 MB. Shrink to at most 1800 px so uploads stay small and fast. */
+/** Phone photos can be 5 to 10 MB. Shrink to at most 1600 px so uploads and the AI read stay fast. */
 async function shrink(file: File): Promise<Blob> {
   if (file.size < 900_000) return file;
   try {
     const img = await createImageBitmap(file);
-    const k = Math.min(1, 1800 / Math.max(img.width, img.height));
+    const k = Math.min(1, 1600 / Math.max(img.width, img.height));
     const cv = document.createElement('canvas');
     cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
     cv.getContext('2d')!.drawImage(img, 0, 0, cv.width, cv.height);

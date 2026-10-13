@@ -75,39 +75,35 @@ const GEMINI_SCHEMA = {
   })),
 };
 
-/** Free-tier models get busy. Try the preferred model, then lighter ones, within the function's time limit. */
-const GEMINI_MODELS = () => [...new Set([process.env.GEMINI_MODEL || 'gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-2.5-flash'])];
+/** Free-tier models get busy. Each attempt uses the next model in this list. */
+const GEMINI_MODELS = () => [...new Set([process.env.GEMINI_MODEL || 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-flash-lite-latest'])];
 
-export async function geminiRead(d: Dispatch, image: Uint8Array, mime: string): Promise<ReadResult> {
-  const body = JSON.stringify({
-    contents: [{ parts: [{ inline_data: { mime_type: mime, data: b64(image) } }, { text: prompt(d) }] }],
-    generationConfig: { responseMimeType: 'application/json', responseSchema: GEMINI_SCHEMA, temperature: 0 },
+export async function geminiRead(d: Dispatch, image: Uint8Array, mime: string, attempt = 1): Promise<ReadResult> {
+  const models = GEMINI_MODELS(), model = models[(attempt - 1) % models.length];
+  const deadline = Date.now() + 9_000; // Netlify Functions stop at 10 seconds
+  const call = (noThinking: boolean) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY! },
+    body: JSON.stringify({
+      contents: [{ parts: [{ inline_data: { mime_type: mime, data: b64(image) } }, { text: prompt(d) }] }],
+      generationConfig: {
+        responseMimeType: 'application/json', responseSchema: GEMINI_SCHEMA, temperature: 0,
+        // Reading a stamp needs no reasoning step, and skipping it is much faster.
+        ...(noThinking ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+      },
+    }),
+    signal: AbortSignal.timeout(Math.max(1000, deadline - Date.now())),
   });
-  const deadline = Date.now() + 8_000;
-  let last = '';
-  for (const model of GEMINI_MODELS()) {
-    if (Date.now() > deadline - 1500) break;
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY! },
-      body,
-      signal: AbortSignal.timeout(Math.max(1500, deadline - Date.now())),
-    }).catch(e => { last = `${model}: ${(e as Error).message}`; return null });
-    if (!res) continue;
-    if (!res.ok) {
-      last = `${model} ${res.status}: ${(await res.text()).slice(0, 160)}`;
-      if ([404, 429, 500, 503].includes(res.status)) continue; // busy, over quota or retired: try the next model
-      break;
-    }
-    const out = await res.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-    const text = out.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
-    return mapRead(d, ChallanRead.parse(JSON.parse(text)));
-  }
-  throw new Error(`Gemini: ${last}`);
+  let res = await call(true);
+  if (res.status === 400 && /thinking/i.test(await res.clone().text()) && deadline - Date.now() > 3000) res = await call(false);
+  if (!res.ok) throw new Error(`${model} ${res.status}: ${(await res.text()).slice(0, 160)}`);
+  const out = await res.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+  const text = out.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
+  return mapRead(d, ChallanRead.parse(JSON.parse(text)));
 }
 
 /* ---------- Claude (paid, optional) ---------- */
-export async function claudeRead(d: Dispatch, image: Uint8Array, mime: string): Promise<ReadResult> {
+export async function claudeRead(d: Dispatch, image: Uint8Array, mime: string, _attempt = 1): Promise<ReadResult> {
   const client = new Anthropic();
   const res = await client.beta.messages.create({
     model: 'claude-opus-5-5',

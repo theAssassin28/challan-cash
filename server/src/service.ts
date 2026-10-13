@@ -11,7 +11,7 @@ import { scriptedRead, type ReadResult } from './reader.js';
 export class HttpError extends Error { constructor(public status: number, message: string) { super(message) } }
 const fail = (msg: string, status = 409): never => { throw new HttpError(status, msg) };
 
-export type Reader = (d: Dispatch, image: Uint8Array, mime: string) => Promise<ReadResult>;
+export type Reader = (d: Dispatch, image: Uint8Array, mime: string, attempt?: number) => Promise<ReadResult>;
 export interface ServiceOptions {
   /** Multiplier for simulated delays (driver replies, clerk, buyer). 0 in tests. */
   delayScale?: number;
@@ -216,7 +216,7 @@ export class Service {
   /**
    * AI read of a real photo, in its own request so the upload stays fast. The app calls this while
    * the reading is pending. Each call makes one attempt inside the function's time limit; after
-   * three failed attempts the sample reading is shown with the reason.
+   * four failed attempts the sample reading is shown with the reason.
    */
   async readNow(ws: string, k: Key) {
     const { out: lease } = await this.act(ws, c => {
@@ -232,7 +232,7 @@ export class Service {
       const img = await this.repo.getPhoto(lease.file);
       let res: ReadResult | null = null, error = 'photo not found';
       if (img) {
-        try { res = await this.opts.read!(lease.d, img.bytes, img.mime) }
+        try { res = await this.opts.read!(lease.d, img.bytes, img.mime, lease.attempt) }
         catch (e) { error = (e as Error).message.slice(0, 300); console.warn('[reader]', error) }
       }
       await this.act(ws, c => {
@@ -241,7 +241,7 @@ export class Service {
         if (res) {
           if (res.recd && c.D[k].status === 'photo') c.D[k].recd = res.recd;
           c.doc.putReadings(k, this.opts.engine ?? 'ai', 'done', res.readings);
-        } else if (lease.attempt >= 3) {
+        } else if (lease.attempt >= 4) {
           this.scripted(c, k);
           c.doc.d.readings[k]!.error = `AI read failed, showing sample readings: ${error}`;
         } else { r.leaseUntil = 0; r.error = error }
