@@ -8,7 +8,7 @@ import {
   D, S, askDriver, ownerPhoto, bookAck, buyerConfirms, go, jump, markRevealed, notOnBooks, openD, openSheet, ord, outside, remind, retake,
   selfPhoto, sendProof, setOffer, skipAdv, takeAdv, tryPath, useUI, type View,
 } from './state';
-import { api } from './api';
+import { api, type Readings } from './api';
 
 const NAV: [View, string, string, string][] = [['home', 'Home', 'n-home', 'n-home-on'], ['tx', 'Transactions', 'n-tx', 'n-tx'], ['prod', 'Products', 'n-prod', 'n-prod-on'], ['store', 'Storefront', 'n-store', 'n-store']];
 export const Nav = ({ on }: { on: View }) => (
@@ -217,12 +217,15 @@ export function DD() {
 /* ---------- check what Razorpay read ---------- */
 export function Chk() {
   const d = D(), revealed = useUI(u => !!u.revealed[d.k]);
-  const [rd, setRd] = useState<{ status: string; engine: string; data: Reading[] | null } | null>(null);
+  const [rd, setRd] = useState<Readings | null>(null);
   const [shown, setShown] = useState(0);
   useEffect(() => {
     let stop = false;
-    const poll = () => api.readings(d.k).then(r => { if (stop) return; setRd(r); if (r.status === 'pending') setTimeout(poll, 800) }).catch(() => {});
-    void poll();
+    // A real photo is read by AI in its own request. Keep asking until it is done.
+    const poll = (first = false) => (first ? api.readings(d.k) : api.read(d.k))
+      .then(r => { if (stop) return; setRd(r); if (r.status === 'pending') setTimeout(poll, first ? 0 : 600) })
+      .catch(() => { if (!stop) setTimeout(poll, 1500) });
+    void poll(true);
     return () => { stop = true };
   }, [d.k, d.photo?.url, d.shotAt]);
   const rs = rd?.status === 'done' ? rd.data ?? [] : [];
@@ -243,6 +246,8 @@ export function Chk() {
         <Sec style={{ paddingBottom: 14 }}><div className={`photo${done ? '' : ' scan'}`} onClick={() => openSheet('photo')}><Photo d={d} hl /><span className="zoom">Tap to zoom</span></div></Sec>
         <Sec t="What Razorpay read">
           {done ? null : <div className="reading"><span className="spin" style={{ display: 'inline-block', width: 13, height: 13, borderRadius: '50%', border: '2px solid #dbe2ee', borderTopColor: 'var(--link)', animation: 'sp .7s linear infinite' }} />{rd?.engine === 'claude' || (d.photo?.url && rd?.status === 'pending') ? 'Reading the photo with AI…' : 'Reading the challan…'}</div>}
+          {done && rd?.error ? <div className="reading" style={{ color: 'var(--amb)' }}>{rd.error.split(':')[0]}</div> : null}
+          {done && rd?.status === 'done' && rd.engine !== 'scripted' ? <div className="reading" style={{ color: 'var(--ok)' }}>Read by AI from the photo. Please check each value</div> : null}
           <div className="card rd">{placeholder.map((r, i) => {
             const on = done || i < shown;
             return <Kv key={i} id={'rd' + i} cls2={on ? '' : 'wait'} l={<>{r.label} · <b>{r.value}</b></>} v={on ? <Pill t={r.verdict} c={r.tone} /> : <span className="spin" />} sub={on ? r.detail : undefined} />;

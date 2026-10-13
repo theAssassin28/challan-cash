@@ -147,3 +147,24 @@ describe('Pune Precision: stale challan', () => {
     expect(s.pays[0].amt).toBe(380000);
   });
 });
+
+describe('AI read of a real photo', () => {
+  const jpeg = () => { const f = new FormData(); f.append('photo', new File([new Uint8Array(500)], 'c.jpg', { type: 'image/jpeg' })); return f };
+  it('reads in its own request and retries a busy model', async () => {
+    let calls = 0;
+    const svc = new Service(new FileRepo(), {
+      delayScale: 0, engine: 'gemini',
+      read: async d => { if (++calls < 2) throw new Error('503 busy'); return { recd: 950, readings: [{ label: 'Pen note', value: 'Recd 950', detail: '', verdict: 'Shortage', tone: 'y' }] } },
+    });
+    const app = createApp(svc);
+    const ws = await svc.create('b', true);
+    const h = { cookie: `cc_ws=${ws}` };
+    expect((await app.request('/api/dispatches/b/photo', { method: 'POST', body: jpeg(), headers: h })).status).toBe(200);
+    expect((await svc.readings(ws, 'b')).status).toBe('pending');
+    let r = await (await app.request('/api/dispatches/b/read', { method: 'POST', headers: h })).json();
+    expect(r).toMatchObject({ status: 'pending', error: '503 busy' });
+    r = await (await app.request('/api/dispatches/b/read', { method: 'POST', headers: h })).json();
+    expect(r).toMatchObject({ status: 'done', engine: 'gemini' });
+    expect((await svc.snapshot(ws)).dispatches.b.recd).toBe(950);
+  });
+});

@@ -1,5 +1,7 @@
 import type { Capture, Email, Key, Offer, Reading, Snapshot } from '@cc/shared';
 
+export type Readings = { engine: string; status: string; data: Reading[] | null; error?: string };
+
 export class ApiError extends Error { constructor(public status: number, message: string) { super(message) } }
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -36,7 +38,9 @@ export const api = {
   remind: (k: Key) => call('POST', `/api/dispatches/${k}/remind`),
   link: (k: Key) => call<{ token: string; url: string; used: boolean } | null>('GET', `/api/dispatches/${k}/link`),
   selfPhoto: async (k: Key, file?: File) => call('POST', `/api/dispatches/${k}/photo`, await photoBody(file)),
-  readings: (k: Key) => call<{ engine: string; status: string; data: Reading[] | null }>('GET', `/api/dispatches/${k}/readings`),
+  readings: (k: Key) => call<Readings>('GET', `/api/dispatches/${k}/readings`),
+  /** Asks the server to read a real photo now. Safe to call repeatedly while it is pending. */
+  read: (k: Key) => call<Readings>('POST', `/api/dispatches/${k}/read`),
   setReceived: (k: Key, qty: number) => call('PATCH', `/api/dispatches/${k}/received`, { qty }),
   sendProof: (k: Key) => call('POST', `/api/dispatches/${k}/proof`),
   email: (k: Key) => call<Email>('GET', `/api/dispatches/${k}/email`),

@@ -18,7 +18,7 @@ export interface Doc {
   messages: { r: ChatMessage[]; a: ChatMessage[] };
   links: LinkRow[];
   photos: PhotoRow[];
-  readings: Partial<Record<Key, { engine: string; status: string; data: Reading[] | null; error?: string }>>;
+  readings: Partial<Record<Key, { engine: string; status: string; data: Reading[] | null; error?: string; attempts?: number; leaseUntil?: number }>>;
   txns: Txn[];
   loans: LoanRow[];
   notices: StoredNotice[];

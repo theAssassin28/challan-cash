@@ -158,8 +158,7 @@ export class Service {
   async capture(token: string, photo: PhotoIn) {
     const ws = await this.wsOfLink(token);
     const photoId = await this.storePhoto(photo);
-    const { out: k } = await this.act(ws, c => this.captureCore(c, token, photo, photoId));
-    await this.read(ws, k, photo);
+    await this.act(ws, c => this.captureCore(c, token, photo, photoId));
   }
 
   private captureCore(c: Ctx, token: string, photo: PhotoIn, photoId: string | null = null): Key {
@@ -181,7 +180,7 @@ export class Service {
       c.log(d, `${d.drv} sent the stamped challan photo. Stamp dated 9 Oct`);
       c.notify({ phone: 'p', app: 'rzp', title: `${d.drv} sent the stamped challan`, text: `${d.id} · ${d.sh}. Razorpay read it: all ${inr(d.qty)} received, stamped 9 Oct.`, action: { view: 'chk', k } });
     }
-    if (photo.simulated) this.scripted(c, k);
+    if (photo.simulated || !this.opts.read) this.scripted(c, k);
     return k;
   }
 
@@ -194,9 +193,8 @@ export class Service {
       this.photoIn(c, d, photo, photoId, 'owner', k === 'b' ? 'Sundaram, Bhosari' : `${d.sh}'s dock`);
       d.status = 'photo'; d.selfShot = true; d.shotAt = c.ap(); c.w.t0 = Date.now();
       c.log(d, `You photographed the stamped challan at ${d.sh}'s dock`);
-      if (photo.simulated) this.scripted(c, k);
+      if (photo.simulated || !this.opts.read) this.scripted(c, k);
     });
-    await this.read(ws, k, photo);
   }
 
   private async storePhoto(photo: PhotoIn) {
@@ -215,20 +213,41 @@ export class Service {
     c.doc.putReadings(k, 'scripted', 'done', res.readings);
   }
 
-  /** AI read of a real photo. Falls back to the scripted reading if no reader is set up or it fails. */
-  private async read(ws: string, k: Key, photo: PhotoIn) {
-    if (photo.simulated) return;
-    let res: ReadResult | null = null, error: string | undefined;
-    if (this.opts.read) {
-      const got = await this.repo.load(ws);
-      try { res = await this.opts.read(hydrate(new WsDoc(got!.doc), got!.doc.dispatches[k]), photo.bytes, photo.mime) }
-      catch (e) { error = (e as Error).message.slice(0, 300); console.warn('[reader] falling back to scripted reading:', error) }
-    }
-    await this.act(ws, c => {
-      if (!res) { this.scripted(c, k); if (error) c.doc.d.readings[k]!.error = `AI read failed, showing sample readings: ${error}`; return }
-      if (res.recd && c.D[k].status === 'photo') c.D[k].recd = res.recd;
-      c.doc.putReadings(k, this.opts.engine ?? 'ai', 'done', res.readings);
+  /**
+   * AI read of a real photo, in its own request so the upload stays fast. The app calls this while
+   * the reading is pending. Each call makes one attempt inside the function's time limit; after
+   * three failed attempts the sample reading is shown with the reason.
+   */
+  async readNow(ws: string, k: Key) {
+    const { out: lease } = await this.act(ws, c => {
+      const r = c.doc.d.readings[k];
+      if (!r || r.status !== 'pending' || !this.opts.read) return null;
+      if ((r.leaseUntil ?? 0) > Date.now()) return null; // another request is reading it
+      r.leaseUntil = Date.now() + 12_000;
+      r.attempts = (r.attempts ?? 0) + 1;
+      const p = c.doc.latestPhoto(k);
+      return p?.file ? { file: p.file, attempt: r.attempts, d: c.full(k) } : null;
     });
+    if (lease) {
+      const img = await this.repo.getPhoto(lease.file);
+      let res: ReadResult | null = null, error = 'photo not found';
+      if (img) {
+        try { res = await this.opts.read!(lease.d, img.bytes, img.mime) }
+        catch (e) { error = (e as Error).message.slice(0, 300); console.warn('[reader]', error) }
+      }
+      await this.act(ws, c => {
+        const r = c.doc.d.readings[k];
+        if (!r || r.status !== 'pending') return;
+        if (res) {
+          if (res.recd && c.D[k].status === 'photo') c.D[k].recd = res.recd;
+          c.doc.putReadings(k, this.opts.engine ?? 'ai', 'done', res.readings);
+        } else if (lease.attempt >= 3) {
+          this.scripted(c, k);
+          c.doc.d.readings[k]!.error = `AI read failed, showing sample readings: ${error}`;
+        } else { r.leaseUntil = 0; r.error = error }
+      });
+    }
+    return this.readings(ws, k);
   }
 
   async readings(ws: string, k: Key) {

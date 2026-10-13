@@ -53,6 +53,7 @@ export function createApp(svc: Service) {
   });
   app.post('/api/dispatches/:k/photo', async c => ok(c, await svc.selfPhoto(await wsOf(c), key(c), await photoOf(c))));
   app.get('/api/dispatches/:k/readings', async c => ok(c, await svc.readings(await wsOf(c), key(c))));
+  app.post('/api/dispatches/:k/read', async c => ok(c, await svc.readNow(await wsOf(c), key(c))));
   app.patch('/api/dispatches/:k/received', async c => {
     const { qty } = z.object({ qty: z.number() }).parse(await c.req.json());
     return ok(c, await svc.setReceived(await wsOf(c), key(c), qty));
