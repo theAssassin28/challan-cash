@@ -18,7 +18,7 @@ export interface Doc {
   messages: { r: ChatMessage[]; a: ChatMessage[] };
   links: LinkRow[];
   photos: PhotoRow[];
-  readings: Partial<Record<Key, { engine: string; status: string; data: Reading[] | null }>>;
+  readings: Partial<Record<Key, { engine: string; status: string; data: Reading[] | null; error?: string }>>;
   txns: Txn[];
   loans: LoanRow[];
   notices: StoredNotice[];
@@ -50,7 +50,7 @@ export class WsDoc {
   addPhoto(p: Omit<PhotoRow, 'created_at'>) { this.d.photos.push({ ...p, created_at: Date.now() }) }
   latestPhoto(k: Key) { return [...this.d.photos].reverse().find(p => p.k === k) }
   photo(id: string) { return this.d.photos.find(p => p.id === id) }
-  putReadings(k: Key, engine: string, status: 'pending' | 'done' | 'failed', data: Reading[] | null) { this.d.readings[k] = { engine, status, data } }
+  putReadings(k: Key, engine: string, status: 'pending' | 'done' | 'failed', data: Reading[] | null, error?: string) { this.d.readings[k] = { engine, status, data, ...(error ? { error } : {}) } }
 
   addTxn(t: Txn) { this.d.txns.push(t) }
   txns(): Txn[] { return [...this.d.txns].reverse() }

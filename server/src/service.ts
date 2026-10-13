@@ -218,14 +218,14 @@ export class Service {
   /** AI read of a real photo. Falls back to the scripted reading if no reader is set up or it fails. */
   private async read(ws: string, k: Key, photo: PhotoIn) {
     if (photo.simulated) return;
-    let res: ReadResult | null = null;
+    let res: ReadResult | null = null, error: string | undefined;
     if (this.opts.read) {
       const got = await this.repo.load(ws);
       try { res = await this.opts.read(hydrate(new WsDoc(got!.doc), got!.doc.dispatches[k]), photo.bytes, photo.mime) }
-      catch (e) { console.warn('[reader] falling back to scripted reading:', (e as Error).message) }
+      catch (e) { error = (e as Error).message.slice(0, 300); console.warn('[reader] falling back to scripted reading:', error) }
     }
     await this.act(ws, c => {
-      if (!res) { this.scripted(c, k); return }
+      if (!res) { this.scripted(c, k); if (error) c.doc.d.readings[k]!.error = `AI read failed, showing sample readings: ${error}`; return }
       if (res.recd && c.D[k].status === 'photo') c.D[k].recd = res.recd;
       c.doc.putReadings(k, this.opts.engine ?? 'ai', 'done', res.readings);
     });
