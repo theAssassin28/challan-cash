@@ -2,7 +2,7 @@ import { Hono, type Context } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
 import QRCode from 'qrcode';
 import { z } from 'zod';
-import { CLERK, LENDER, MERCHANT, R, cn, inr, invNo, type Key } from '@cc/shared';
+import { CLERK, LENDER, MERCHANT, R, cn, inr, invNo, type Key } from '../../shared/src/index.js';
 import { HttpError, Service } from './service.js';
 
 const COOKIE = 'cc_ws';

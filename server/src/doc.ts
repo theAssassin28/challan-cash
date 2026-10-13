@@ -1,4 +1,4 @@
-import type { ChatMessage, Email, Key, LogEntry, Notice, Phone, Reading, Txn, Dispatch } from '@cc/shared';
+import type { ChatMessage, Email, Key, LogEntry, Notice, Phone, Reading, Txn, Dispatch } from '../../shared/src/index.js';
 
 // One demo workspace is one JSON document. It is loaded, changed and saved per request,
 // which works the same on a laptop and on Netlify Functions (no disk, no long-running process).

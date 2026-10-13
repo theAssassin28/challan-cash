@@ -9,7 +9,6 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",
-    "@cc/shared": "*",
     "@hono/node-server": "^2.1.5",
     "@netlify/blobs": "^11.1.4",
     "hono": "^4.13.13",

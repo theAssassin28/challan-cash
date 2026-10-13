@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import {
   CLERK, LENDER, MERCHANT, ORD, R, cn, feeOf, inr, invNo, last4, nowCap, offerOptions, payable, relOf, t2For, apr,
   type Dispatch, type Email, type Key, type Notice, type Offer, type Snapshot,
-} from '@cc/shared';
+} from '../../shared/src/index.js';
 import { START, seedChats, seedDispatches, seedLogs, seedTxns } from './seed.js';
 import { WsDoc, assertAppendOnly, type Doc, type StoredDispatch, type Timer } from './doc.js';
 import type { Repo } from './repo.js';

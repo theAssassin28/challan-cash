@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
-import type { Dispatch, Reading } from '@cc/shared';
-import { MERCHANT, inr } from '@cc/shared';
+import type { Dispatch, Reading } from '../../shared/src/index.js';
+import { MERCHANT, inr } from '../../shared/src/index.js';
 
 // Reads a photo of a stamped delivery challan and flags what it found.
 // The scripted reader returns the sample readings used in the demo. Real uploaded photos are

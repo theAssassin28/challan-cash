@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Snapshot } from '@cc/shared';
+import type { Snapshot } from '../../shared/src/index.js';
 import { FileRepo } from './repo.js';
 import { Service } from './service.js';
 import { createApp } from './app.js';

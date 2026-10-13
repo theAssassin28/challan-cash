@@ -1,4 +1,4 @@
-import type { Key, Txn } from '@cc/shared';
+import type { Key, Txn } from '../../shared/src/index.js';
 import type { StoredDispatch } from './doc.js';
 
 // Sample data from the product note. Prakash is a composite persona.
